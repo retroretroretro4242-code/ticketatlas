@@ -5,7 +5,7 @@ import os
 
 TOKEN = os.getenv("TOKEN")
 
-SUNUCU_ID = 1384288019426574367  # BURAYA SUNUCU ID
+SUNUCU_ID = 1384288019426574367  # Sunucu ID
 
 YETKILI_ROLLER = [
     1474831393644220599,
@@ -75,12 +75,15 @@ class TicketDropdown(discord.ui.Select):
         embed.set_footer(text="Atlas Project Support System")
 
         await kanal.send(
-            content=f"{interaction.user.mention}",
+            content=interaction.user.mention,
             embed=embed,
             view=CloseView()
         )
 
-        await interaction.followup.send(f"Ticket oluşturuldu: {kanal.mention}", ephemeral=True)
+        await interaction.followup.send(
+            f"Ticket oluşturuldu: {kanal.mention}",
+            ephemeral=True
+        )
 
 
 class TicketView(discord.ui.View):
@@ -112,7 +115,11 @@ class CloseView(discord.ui.View):
 # SLASH KOMUT
 # =========================
 
-@bot.tree.command(name="ticketpanel", description="Atlas Project Ticket Panel", guild=discord.Object(id=SUNUCU_ID))
+@bot.tree.command(
+    name="ticketpanel",
+    description="Atlas Project Ticket Panel",
+    guild=discord.Object(id=SUNUCU_ID)
+)
 async def ticketpanel(interaction: discord.Interaction):
 
     embed = discord.Embed(
@@ -121,7 +128,16 @@ async def ticketpanel(interaction: discord.Interaction):
         color=0x2f3136
     )
 
-    await interaction.response.send_message(embed=embed, view=TicketView())
+    embed.set_image(
+        url="https://cdn.discordapp.com/attachments/1475546220767219765/1475848624809185506/Pembe_ve_Mavi_Galaksi_Oyun_Oynama_Youtube_Banner.png"
+    )
+
+    embed.set_footer(text="Atlas Project Support System")
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=TicketView()
+    )
 
 
 # =========================
