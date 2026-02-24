@@ -6,7 +6,7 @@ import datetime
 TOKEN = os.getenv("TOKEN")
 
 SUNUCU_ID = 1384288019426574367
-LOG_KANAL_ID = 1474827965643886864  # BURAYA LOG KANAL ID
+LOG_KANAL_ID = 1474827965643886864 # BURAYA LOG KANAL ID
 
 YETKILI_ROLLER = [
     1474831393644220599,
@@ -25,83 +25,13 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-ticket_counter = 0
 open_tickets = {}
+ticket_counter = 0
 
 
-# =========================
-# CLAIM BUTTON
-# =========================
-
-class ClaimButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="Claim",
-            style=discord.ButtonStyle.success,
-            custom_id="claim_ticket"
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-
-        if not any(role.id in YETKILI_ROLLER for role in interaction.user.roles):
-            return await interaction.response.send_message("Yetkin yok.", ephemeral=True)
-
-        channel = interaction.channel
-        open_tickets[channel.id]["claimed_by"] = interaction.user.id
-
-        await interaction.response.send_message(
-            f"🎯 Ticket {interaction.user.mention} tarafından claim edildi."
-        )
-
-
-# =========================
-# CLOSE BUTTON
-# =========================
-
-class CloseButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="Kapat",
-            style=discord.ButtonStyle.danger,
-            custom_id="close_ticket"
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-
-        if not any(role.id in YETKILI_ROLLER for role in interaction.user.roles):
-            return await interaction.response.send_message("Yetkin yok.", ephemeral=True)
-
-        channel = interaction.channel
-        messages = []
-
-        async for msg in channel.history(limit=None, oldest_first=True):
-            messages.append(f"[{msg.created_at}] {msg.author}: {msg.content}")
-
-        transcript = "\n".join(messages)
-
-        with open(f"transcript-{channel.id}.txt", "w", encoding="utf-8") as f:
-            f.write(transcript)
-
-        log_channel = bot.get_channel(LOG_KANAL_ID)
-        if log_channel:
-            await log_channel.send(
-                f"📁 Transcript for {channel.name}",
-                file=discord.File(f"transcript-{channel.id}.txt")
-            )
-
-        await channel.delete()
-
-
-class TicketButtons(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(ClaimButton())
-        self.add_item(CloseButton())
-
-
-# =========================
+# =======================
 # TICKET SELECT
-# =========================
+# =======================
 
 class TicketSelect(discord.ui.Select):
     def __init__(self):
@@ -114,11 +44,10 @@ class TicketSelect(discord.ui.Select):
         super().__init__(
             placeholder="Kategori seç...",
             options=options,
-            custom_id="ticket_select"
+            custom_id="ticket_select_menu"
         )
 
     async def callback(self, interaction: discord.Interaction):
-
         await interaction.response.defer(ephemeral=True)
 
         if interaction.user.id in open_tickets:
@@ -142,7 +71,7 @@ class TicketSelect(discord.ui.Select):
         for rol_id in YETKILI_ROLLER:
             rol = interaction.guild.get_role(rol_id)
             if rol:
-                overwrites[rol] = discord.PermissionOverwrite(read_messages=True)
+                overwrites[rol] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
         channel = await interaction.guild.create_text_channel(
             name=f"ticket-{ticket_counter}",
@@ -151,7 +80,6 @@ class TicketSelect(discord.ui.Select):
         )
 
         open_tickets[interaction.user.id] = channel.id
-        open_tickets[channel.id] = {"owner": interaction.user.id, "claimed_by": None}
 
         embed = discord.Embed(
             title=f"🎟 Ticket #{ticket_counter}",
@@ -173,9 +101,82 @@ class TicketView(discord.ui.View):
         self.add_item(TicketSelect())
 
 
-# =========================
+# =======================
+# CLAIM & CLOSE
+# =======================
+
+class ClaimButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Claim",
+            style=discord.ButtonStyle.success,
+            custom_id="ticket_claim_button"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not any(role.id in YETKILI_ROLLER for role in interaction.user.roles):
+            return await interaction.response.send_message("Yetkin yok.", ephemeral=True)
+
+        await interaction.response.send_message(
+            f"🎯 {interaction.user.mention} ticketi claim etti."
+        )
+
+
+class CloseButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Kapat",
+            style=discord.ButtonStyle.danger,
+            custom_id="ticket_close_button"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not any(role.id in YETKILI_ROLLER for role in interaction.user.roles):
+            return await interaction.response.send_message("Yetkin yok.", ephemeral=True)
+
+        channel = interaction.channel
+
+        transcript_lines = []
+        async for msg in channel.history(limit=None, oldest_first=True):
+            transcript_lines.append(
+                f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author}: {msg.content}"
+            )
+
+        transcript_text = "\n".join(transcript_lines)
+
+        filename = f"transcript-{channel.id}.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(transcript_text)
+
+        log_channel = bot.get_channel(LOG_KANAL_ID)
+        if log_channel:
+            await log_channel.send(
+                f"📁 Transcript - {channel.name}",
+                file=discord.File(filename)
+            )
+
+        owner_id = None
+        for user_id, ch_id in open_tickets.items():
+            if ch_id == channel.id:
+                owner_id = user_id
+                break
+
+        if owner_id:
+            del open_tickets[owner_id]
+
+        await channel.delete()
+
+
+class TicketButtons(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ClaimButton())
+        self.add_item(CloseButton())
+
+
+# =======================
 # SLASH KOMUT
-# =========================
+# =======================
 
 @bot.tree.command(
     name="ticketpanel",
@@ -185,7 +186,7 @@ class TicketView(discord.ui.View):
 async def ticketpanel(interaction: discord.Interaction):
 
     embed = discord.Embed(
-        title="🚀 Atlas Project Ultra Support",
+        title="🚀 Atlas Project Support",
         description="Aşağıdan kategori seçerek ticket oluşturabilirsiniz.",
         color=0x5865F2
     )
@@ -193,9 +194,9 @@ async def ticketpanel(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=TicketView())
 
 
-# =========================
+# =======================
 # READY
-# =========================
+# =======================
 
 @bot.event
 async def on_ready():
