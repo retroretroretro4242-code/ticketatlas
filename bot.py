@@ -1,13 +1,18 @@
 import discord
 from discord.ext import commands
+from discord.ui import Button, View
+from datetime import datetime
 import os
-import datetime
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN")  # Railway env variable
 
+# =======================
+# SUNUCU ve LOG AYARLARI
+# =======================
 SUNUCU_ID = 1384288019426574367
-LOG_KANAL_ID = 1474827965643886864 # BURAYA LOG KANAL ID
+LOG_CHANNEL_ID = 1474827965643886864
 
+# Yetkili roller (ticketleri onay/red ve kapatma yetkisi olan roller)
 YETKILI_ROLLER = [
     1474831393644220599,
     1384294618195169311,
@@ -18,192 +23,134 @@ YETKILI_ROLLER = [
 ]
 
 intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
-intents.messages = True
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-open_tickets = {}
-ticket_counter = 0
-
-
 # =======================
-# TICKET SELECT
+# Ticket view ve onay/red
 # =======================
-
-class TicketSelect(discord.ui.Select):
+class TicketView(View):
     def __init__(self):
-        options = [
-            discord.SelectOption(label="Destek", emoji="🎫"),
-            discord.SelectOption(label="Şikayet", emoji="⚠️"),
-            discord.SelectOption(label="Satın Alım", emoji="💎")
-        ]
+        super().__init__(timeout=None)
+        self.add_item(Button(label="Ekip Alım", style=discord.ButtonStyle.green, custom_id="ekip_alim"))
+        self.add_item(Button(label="Yetkili Alım", style=discord.ButtonStyle.blurple, custom_id="yetkili_alim"))
+        self.add_item(Button(label="Diğer", style=discord.ButtonStyle.gray, custom_id="diger"))
 
-        super().__init__(
-            placeholder="Kategori seç...",
-            options=options,
-            custom_id="ticket_select_menu"
-        )
+class CloseTicket(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(Button(label="🔒 Ticket Kapat", style=discord.ButtonStyle.danger, custom_id="ticket_kapat"))
 
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+class ApprovalView(View):
+    def __init__(self, user: discord.Member):
+        super().__init__(timeout=None)
+        self.add_item(Button(label="✅ Onayla", style=discord.ButtonStyle.green, custom_id=f"onay_{user.id}"))
+        self.add_item(Button(label="❌ Reddet", style=discord.ButtonStyle.red, custom_id=f"red_{user.id}"))
 
-        if interaction.user.id in open_tickets:
-            return await interaction.followup.send(
-                "Zaten açık bir ticketin var.",
-                ephemeral=True
-            )
+# =======================
+# Ticket açma komutu
+# =======================
+@bot.command()
+async def ticket(ctx):
+    embed = discord.Embed(
+        title="🎫 Ticket Aç",
+        description=(
+            "Aşağıdaki butonlardan başvurun türünü seçebilirsin:\n\n"
+            "🟩 **Ekip Alım**: Sunucuda ekibin bir parçası olmak istiyorsan.\n"
+            "🟦 **Yetkili Alım**: Sunucuda yetkili olmak istiyorsan.\n"
+            "⬜ **Diğer**: Farklı sorun veya talepler için."
+        ),
+        color=discord.Color.orange()
+    )
+    await ctx.send(embed=embed, view=TicketView())
 
-        global ticket_counter
-        ticket_counter += 1
+# =======================
+# Etkileşim (button) işlemleri
+# =======================
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.type != discord.InteractionType.component:
+        return
 
-        kategori = discord.utils.get(interaction.guild.categories, name="ATLAS SUPPORT")
-        if not kategori:
-            kategori = await interaction.guild.create_category("ATLAS SUPPORT")
+    custom_id = interaction.data["custom_id"]
+    guild = bot.get_guild(SUNUCU_ID)
+    log_channel = guild.get_channel(LOG_CHANNEL_ID)
 
+    if custom_id in ["ekip_alim", "yetkili_alim", "diger"]:
+        kanal_adi = f"ticket-{interaction.user.name}".lower()
         overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
 
         for rol_id in YETKILI_ROLLER:
-            rol = interaction.guild.get_role(rol_id)
+            rol = guild.get_role(rol_id)
             if rol:
                 overwrites[rol] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-        channel = await interaction.guild.create_text_channel(
-            name=f"ticket-{ticket_counter}",
-            category=kategori,
-            overwrites=overwrites
-        )
+        channel = await guild.create_text_channel(name=kanal_adi, overwrites=overwrites)
 
-        open_tickets[interaction.user.id] = channel.id
-
-        embed = discord.Embed(
-            title=f"🎟 Ticket #{ticket_counter}",
-            description=f"Sahibi: {interaction.user.mention}\nKategori: {self.values[0]}",
-            color=0x5865F2
-        )
-
-        await channel.send(embed=embed, view=TicketButtons())
-
-        await interaction.followup.send(
-            f"Ticket oluşturuldu: {channel.mention}",
-            ephemeral=True
-        )
-
-
-class TicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(TicketSelect())
-
-
-# =======================
-# CLAIM & CLOSE
-# =======================
-
-class ClaimButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="Claim",
-            style=discord.ButtonStyle.success,
-            custom_id="ticket_claim_button"
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        if not any(role.id in YETKILI_ROLLER for role in interaction.user.roles):
-            return await interaction.response.send_message("Yetkin yok.", ephemeral=True)
-
-        await interaction.response.send_message(
-            f"🎯 {interaction.user.mention} ticketi claim etti."
-        )
-
-
-class CloseButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="Kapat",
-            style=discord.ButtonStyle.danger,
-            custom_id="ticket_close_button"
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        if not any(role.id in YETKILI_ROLLER for role in interaction.user.roles):
-            return await interaction.response.send_message("Yetkin yok.", ephemeral=True)
-
-        channel = interaction.channel
-
-        transcript_lines = []
-        async for msg in channel.history(limit=None, oldest_first=True):
-            transcript_lines.append(
-                f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author}: {msg.content}"
+        if custom_id == "ekip_alim":
+            baslik = "🟩 Ekip Alım Başvurusu"
+            aciklama = (
+                f"Merhaba {interaction.user.mention}! 👋\n\n"
+                "Sunucuda ekibin bir parçası olmak istiyorsan buradan başvurabilirsin.\n\n"
+                "**Bilgileri doldur:**\n1️⃣ Discord Tag:\n2️⃣ Yaş:\n3️⃣ Deneyim / Bilgi:\n4️⃣ Neden ekibe katılmak istiyorsun?\n\n"
+                "Başvurunuz işleniyor… 🔄"
             )
+        elif custom_id == "yetkili_alim":
+            baslik = "🟦 Yetkili Başvurusu"
+            aciklama = (
+                f"Merhaba {interaction.user.mention}! 👋\n\n"
+                "Sunucuda yetkili olmak istiyorsan başvurunu buradan yapabilirsin.\n\n"
+                "**Bilgileri doldur:**\n1️⃣ Discord Tag:\n2️⃣ Yaş:\n3️⃣ Deneyim / Bilgi:\n4️⃣ Sunucuyu nasıl yönetirsin?\n\n"
+                "Başvurunuz işleniyor… 🔄"
+            )
+        else:
+            baslik = "⬜ Genel Ticket"
+            aciklama = f"Merhaba {interaction.user.mention}! 👋\nSunucu ile ilgili sorun veya taleplerinizi buradan iletebilirsiniz.\nBaşvurunuz işleniyor… 🔄"
 
-        transcript_text = "\n".join(transcript_lines)
+        embed = discord.Embed(title=baslik, description=aciklama, color=discord.Color.green())
+        await channel.send(embed=embed, view=ApprovalView(interaction.user))
 
-        filename = f"transcript-{channel.id}.txt"
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(transcript_text)
+        if log_channel:
+            await log_channel.send(f"🟢 Ticket açıldı: {channel.mention} | Kullanıcı: {interaction.user.mention} | Tür: {baslik}")
 
-        log_channel = bot.get_channel(LOG_KANAL_ID)
+        await interaction.response.send_message(f"Ticket oluşturuldu: {channel.mention}", ephemeral=True)
+
+    elif custom_id == "ticket_kapat":
         if log_channel:
             await log_channel.send(
-                f"📁 Transcript - {channel.name}",
-                file=discord.File(filename)
+                f"🔴 Ticket kapatıldı: {interaction.channel.name} | Kullanıcı: {interaction.user.mention} | Zaman: {datetime.utcnow().strftime('%d-%m-%Y %H:%M:%S')} UTC"
             )
+        await interaction.channel.send("Ticket kapatılıyor… ⛔")
+        await interaction.channel.delete()
 
-        owner_id = None
-        for user_id, ch_id in open_tickets.items():
-            if ch_id == channel.id:
-                owner_id = user_id
-                break
+    elif custom_id.startswith("onay_") or custom_id.startswith("red_"):
+        user_id = int(custom_id.split("_")[1])
+        member = guild.get_member(user_id)
+        if not member:
+            await interaction.response.send_message("Kullanıcı bulunamadı.", ephemeral=True)
+            return
 
-        if owner_id:
-            del open_tickets[owner_id]
+        if custom_id.startswith("onay_"):
+            mesaj = f"🎉 Başvurunuz onaylandı! Tebrikler {member.mention}."
+            renk = discord.Color.green()
+        else:
+            mesaj = f"❌ Başvurunuz reddedildi {member.mention}."
+            renk = discord.Color.red()
 
-        await channel.delete()
+        await interaction.channel.send(embed=discord.Embed(description=mesaj, color=renk))
+        try:
+            await member.send(mesaj)
+        except:
+            pass
 
-
-class TicketButtons(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(ClaimButton())
-        self.add_item(CloseButton())
-
-
-# =======================
-# SLASH KOMUT
-# =======================
-
-@bot.tree.command(
-    name="ticketpanel",
-    description="Atlas Ultra Support Panel",
-    guild=discord.Object(id=SUNUCU_ID)
-)
-async def ticketpanel(interaction: discord.Interaction):
-
-    embed = discord.Embed(
-        title="🚀 Atlas Project Support",
-        description="Aşağıdan kategori seçerek ticket oluşturabilirsiniz.",
-        color=0x5865F2
-    )
-
-    await interaction.response.send_message(embed=embed, view=TicketView())
-
-
-# =======================
-# READY
-# =======================
-
-@bot.event
-async def on_ready():
-    print(f"Bot aktif: {bot.user}")
-    await bot.tree.sync(guild=discord.Object(id=SUNUCU_ID))
-    bot.add_view(TicketView())
-    bot.add_view(TicketButtons())
-
+        if log_channel:
+            await log_channel.send(
+                f"📌 Başvuru durumlandı: {member.mention} | Kanal: {interaction.channel.name} | Durum: {'Onaylandı' if custom_id.startswith('onay_') else 'Reddedildi'}"
+            )
 
 bot.run(TOKEN)
