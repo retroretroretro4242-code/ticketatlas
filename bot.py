@@ -4,7 +4,7 @@ from discord.ui import Button, View
 from datetime import datetime
 import os
 
-TOKEN = os.getenv("DISCORD_TOKEN")  # Railway env variable
+TOKEN = os.getenv("TOKEN")  # Railway env variable
 
 # =======================
 # SUNUCU ve LOG AYARLARI
